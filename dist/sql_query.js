@@ -49,6 +49,7 @@ System.register(['lodash', 'app/core/utils/datemath', 'moment', './scanner'], fu
                         .replace(/\$table/g, this.target.database + '.' + this.target.table)
                         .replace(/\$from/g, from)
                         .replace(/\$to/g, to)
+                        .replace(/\$sample/g, Math.min(((to - from) <= 3600) ? 1 : ((to - from) / 3600), 500))
                         .replace(/\$dateCol/g, this.target.dateColDataType)
                         .replace(/\$dateTimeCol/g, this.target.dateTimeColDataType)
                         .replace(/\$interval/g, interval)
