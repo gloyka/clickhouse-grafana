@@ -1,3 +1,65 @@
+# 1.4.3 (2018-04-09)
+
+## Fixes
+
+* fix broken AST when using nested `SELECT` without `FROM` statement (#45)
+* strict statement matching (#44)
+* rebuild queries from AST only if adhoc filters were applied
+
+
+# 1.4.2 (2018-03-18)
+
+## Fixes
+
+* support `UNION ALL` statements
+* proper format for `LIMIT N,M` construction (thx to @shankerwangmiao)
+* update `Show Help` section with $unescape description
+
+
+# 1.4.1 (2018-03-12)
+
+## New Features
+
+* $unescape - unescapes variable value by removing single quotes. Used for multiple-value string variables: "SELECT $unescape($column) FROM requests WHERE $unescape($column) = 5"
+
+## Fixes
+
+* labmda-operator `->` no more breaks while reformatting query
+
+
+# 1.4.0 (2018-03-08)
+
+## New Features
+
+Ad-hoc filters support:
+* If there is an Ad-hoc variable, plugin will fetch all columns of all tables of all databases (except system database) as tags.
+So in dropdown menu will be options like `database.table.column`
+* If there are ENUM columns, plugin will fetch their options and use them as tag values
+* Plugin will apply Ad-hoc filters to all queries on the dashboard if their settings `$database` and `$table` are the same
+as Ad-hoc's `database.table`
+* There are no option to apply OR operator for multiple Ad-hoc filters - see grafana/grafana#10918
+* There are no option to use IN operator for Ad-hoc filters due to Grafana limitations
+
+# 1.3.1 (2018-02-12)
+
+## Fixes
+
+* support array indexing int AST
+
+
+# 1.3.0 (2018-02-07)
+
+## New Features
+* columns autocompletion in ace-editor
+
+# 1.2.7 (2018-01-05)
+
+## Fixes
+
+* properly format query with reserved names
+* fix #31
+
+
 # 1.2.6 (2017-12-13)
 
 ## Fixes

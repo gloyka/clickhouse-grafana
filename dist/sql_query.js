@@ -25,10 +25,34 @@ System.register(['lodash', 'app/core/utils/datemath', 'moment', './scanner'], fu
                     this.templateSrv = templateSrv;
                     this.options = options;
                 }
-                SqlQuery.prototype.replace = function (options) {
-                    var query = this.target.query, scanner = new scanner_1.default(query), dateTimeType = this.target.dateTimeType ? this.target.dateTimeType : 'DATETIME', from = SqlQuery.convertTimestamp(SqlQuery.round(this.options.range.from, this.target.round)), to = SqlQuery.convertTimestamp(SqlQuery.round(this.options.range.to, this.target.round)), timeSeries = SqlQuery.getTimeSeries(dateTimeType), timeFilter = SqlQuery.getTimeFilter(this.options.rangeRaw.to === 'now', dateTimeType), i = this.templateSrv.replace(this.target.interval, options.scopedVars) || options.interval, interval = SqlQuery.convertInterval(i, this.target.intervalFactor || 1);
+                SqlQuery.prototype.replace = function (options, adhocFilters) {
+                    var self = this, query = this.target.query, scanner = new scanner_1.default(query), dateTimeType = this.target.dateTimeType ? this.target.dateTimeType : 'DATETIME', from = SqlQuery.convertTimestamp(SqlQuery.round(this.options.range.from, this.target.round)), to = SqlQuery.convertTimestamp(SqlQuery.round(this.options.range.to, this.target.round)), timeSeries = SqlQuery.getTimeSeries(dateTimeType), timeFilter = SqlQuery.getTimeFilter(this.options.rangeRaw.to === 'now', dateTimeType), i = this.templateSrv.replace(this.target.interval, options.scopedVars) || options.interval, interval = SqlQuery.convertInterval(i, this.target.intervalFactor || 1);
                     try {
                         var ast = scanner.toAST();
+                        if (adhocFilters.length > 0) {
+                            if (!ast.hasOwnProperty('where')) {
+                                ast.where = [];
+                            }
+                            adhocFilters.forEach(function (af) {
+                                var parts = af.key.split('.');
+                                if (parts.length < 3) {
+                                    console.log("adhoc filters: filter " + af.key + "` has wrong format");
+                                    return;
+                                }
+                                if (self.target.database != parts[0] || self.target.table != parts[1]) {
+                                    return;
+                                }
+                                var operator = SqlQuery.clickhouseOperator(af.operator);
+                                var cond = parts[2] + " " + operator + " " + af.value;
+                                if (ast.where.length > 0) {
+                                    // OR is not implemented
+                                    // @see https://github.com/grafana/grafana/issues/10918
+                                    cond = "AND " + cond;
+                                }
+                                ast.where.push(cond);
+                            });
+                            query = scanner.Print(ast);
+                        }
                         if (ast.hasOwnProperty('$columns') && !lodash_1.default.isEmpty(ast['$columns'])) {
                             query = SqlQuery.columns(query);
                         }
@@ -43,6 +67,7 @@ System.register(['lodash', 'app/core/utils/datemath', 'moment', './scanner'], fu
                         console.log('AST parser error: ', err.message);
                     }
                     query = this.templateSrv.replace(query, options.scopedVars, SqlQuery.interpolateQueryExpr);
+                    query = SqlQuery.unescape(query);
                     this.target.rawQuery = query
                         .replace(/\$timeSeries/g, timeSeries)
                         .replace(/\$timeFilter/g, timeFilter)
@@ -219,7 +244,7 @@ System.register(['lodash', 'app/core/utils/datemath', 'moment', './scanner'], fu
                     return Math.ceil(sec * intervalFactor);
                 };
                 SqlQuery.interpolateQueryExpr = function (value, variable, defaultFormatFn) {
-                    // if no multi or include all do not regexEscape
+                    // if no `multiselect` or `include all` - do not escape
                     if (!variable.multi && !variable.includeAll) {
                         return value;
                     }
@@ -230,6 +255,22 @@ System.register(['lodash', 'app/core/utils/datemath', 'moment', './scanner'], fu
                         return SqlQuery.clickhouseEscape(v, variable);
                     });
                     return escapedValues.join(',');
+                };
+                SqlQuery.clickhouseOperator = function (value) {
+                    switch (value) {
+                        case "=":
+                        case "!=":
+                        case ">":
+                        case "<":
+                            return value;
+                        case "=~":
+                            return "LIKE";
+                        case "!~":
+                            return "NOT LIKE";
+                        default:
+                            console.log("adhoc filters: got unsupported operator `" + value + "`");
+                            return value;
+                    }
                 };
                 SqlQuery.clickhouseEscape = function (value, variable) {
                     var isDigit = true;
@@ -250,6 +291,22 @@ System.register(['lodash', 'app/core/utils/datemath', 'moment', './scanner'], fu
                     else {
                         return "'" + value.replace(/[\\']/g, '\\$&') + "'";
                     }
+                };
+                SqlQuery.unescape = function (query) {
+                    var macros = '$unescape(';
+                    var openMacros = query.indexOf(macros);
+                    while (openMacros !== -1) {
+                        var closeMacros = query.indexOf(')', openMacros);
+                        if (closeMacros === -1) {
+                            throw { message: 'unable to find closing brace for $unescape macros: ' + query.substring(0, openMacros) };
+                        }
+                        var arg = query.substring(openMacros + macros.length, closeMacros)
+                            .trim();
+                        arg = arg.replace(/[']+/g, '');
+                        query = query.substring(0, openMacros) + arg + query.substring(closeMacros + 1, query.length);
+                        openMacros = query.indexOf('$unescape(');
+                    }
+                    return query;
                 };
                 return SqlQuery;
             })();

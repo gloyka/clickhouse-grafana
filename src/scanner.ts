@@ -1,246 +1,266 @@
 import _ from 'lodash';
 
-export default class Scanner{
+export default class Scanner {
+    tree: any;
+    rootToken: any;
     token: any;
-    AST: any;
     skipSpace: boolean;
     re: any;
+    expectedNext: boolean;
 
     _sOriginal: any;
     _s: any;
 
     /** @ngInject */
     constructor(s) {
-      this._sOriginal = s;
-      this.token = null;
-      this.AST = {};
+        this._sOriginal = s;
+        this.token = null;
     }
 
-    raw () {
-      return this._sOriginal;
+    raw() {
+        return this._sOriginal;
     };
 
     expect(token) {
-      this.expectNext();
-      if (!this.isToken(token)) {
-        throw("expecting [" + token + "], but got [" + this.token + "] at [" + this._s + "]");
-      }
+        this.expectNext();
+        if (!this.isToken(token)) {
+            throw("expecting [" + token + "], but got [" + this.token + "] at [" + this._s + "]");
+        }
     };
 
     isToken(token) {
-      return _.toUpper(token) === _.toUpper(this.token);
+        return _.toUpper(token) === _.toUpper(this.token);
     };
 
     expectNext() {
-      if (!this.next()) {
-        throw("expecting additional token at the end of query [" + this._sOriginal + "]");
-      }
-    };
-
-    prev() {
-      if (this.token === null) {
-        throw("BUG: prev called on empty token");
-      }
-      this._s = this.token + " " + this._s;
-      this.token = null;
+        if (!this.next()) {
+            throw("expecting additional token at the end of query [" + this._sOriginal + "]");
+        }
     };
 
     next() {
-      while (this._next()) {
-        if (this.skipSpace && isWS(this.token)) {
-          // skip whitespace
-          continue;
+        while (this._next()) {
+            if (this.skipSpace && isWS(this.token)) {
+                // skip whitespace
+                continue;
+            }
+            if (isComment(this.token)) {
+                // skip comment
+                continue;
+            }
+            return true;
         }
-        if (isComment(this.token)) {
-          // skip comment
-          continue;
-        }
-        return true;
-      }
-
-      return false;
+        return false;
     };
 
     _next() {
-      if (this._s.length === 0) {
-        return false;
-      }
-      var r = this.re.exec(this._s);
-      if (r === null) {
-        throw("cannot find next token in [" + this._s + "]");
-      }
+        if (this._s.length === 0) {
+            return false;
+        }
+        let r = this.re.exec(this._s);
+        if (r === null) {
+            throw("cannot find next token in [" + this._s + "]");
+        }
 
-      this.token = r[0];
-      this._s = this._s.substring(this.token.length);
-      return true;
+        this.token = r[0];
+        this._s = this._s.substring(this.token.length);
+        return true;
     };
 
     Format() {
-      return print(this.toAST());
+        return print(this.toAST());
     };
+
+    Print(ast) {
+        return print(ast)
+    }
+
+    push(argument) {
+        this.tree[this.rootToken].push(argument);
+        this.expectedNext = false;
+    }
+
+    setRoot(token) {
+        this.rootToken = token.toLowerCase();
+        this.tree[this.rootToken] = [];
+        this.expectedNext = true;
+    }
+
+    isExpectedNext(): boolean {
+        let v = this.expectedNext;
+        this.expectedNext = false;
+        return v
+    }
+
+    appendToken(argument): string {
+        return (argument === '' || isSkipSpace(argument[argument.length - 1]))
+            ? this.token
+            : ' ' + this.token;
+    }
 
     toAST() {
-      this._s = this._sOriginal;
-      this.skipSpace = true;
-      this.re = new RegExp("^(?:" + tokenRe + ")", 'i');
-      let rootToken = 'root',
-        subQuery = '',
-        argument = '',
-        ast = {},
-        subAST = {},
-        expectNextEl = false;
-
-      ast[rootToken] = [];
-      while (this.next()) {
-        if (isStatement(this.token) && !ast.hasOwnProperty(_.toLower(this.token)) && !expectNextEl) {
-
-          if (argument.length > 0) {
-            ast[rootToken].push(argument);
+        this._s = this._sOriginal;
+        this.tree = {};
+        this.setRoot('root');
+        this.expectedNext = false;
+        this.skipSpace = true;
+        this.re = new RegExp("^(?:" + tokenRe + ")", 'i');
+        let subQuery = '',
             argument = '';
-            expectNextEl = false;
-          }
 
-          rootToken = _.toLower(this.token);
-          ast[rootToken] = [];
-          expectNextEl = true;
-        }
-        else if (this.token === ',' && isClosured(argument))  {
-          ast[rootToken].push(argument);
-          argument = '';
-          expectNextEl = true;
-        }
-        else if (isClosureChars(this.token) && rootToken === 'from') {
-          subQuery = betweenBraces(this._s);
-          ast[rootToken] = toAST(subQuery);
-          this._s = this._s.substring(subQuery.length+1);
-        }
-        else if (isMacroFunc(this.token)) {
-          let func = this.token;
-          if (!this.next()) {
-            throw("wrong function signature for `" + func + "` at [" + this._s + "]");
-          }
-
-          subQuery = betweenBraces(this._s);
-          subAST = toAST(subQuery);
-          if (isSet(subAST, 'root')) {
-            ast[func] = subAST['root'].map(function(item) {
-              return item;
-            });
-          } else {
-            ast[func] = subAST;
-          }
-          this._s = this._s.substring(subQuery.length+1);
-
-          // macro funcs are used instead of SELECT statement
-          ast['select'] = [];
-        }
-        else if (isIn(this.token)) {
-          argument += ' ' + this.token;
-          if (!this.next()) {
-            throw("wrong in signature for `" + argument + "` at [" + this._s + "]");
-          }
-
-          if (isClosureChars(this.token)) {
-            subQuery = betweenBraces(this._s);
-            subAST = toAST(subQuery);
-            if (isSet(subAST, 'root')) {
-              argument += ' (' + subAST['root'].map(function(item) {
-                  return item;
-                });
-              argument = argument + ')';
-            } else {
-              argument += ' (' + newLine + print(subAST, tabSize) + ')';
-              ast[rootToken].push(argument);
-              argument = '';
+        while (this.next()) {
+            if (!this.isExpectedNext() && isStatement(this.token) && !this.tree.hasOwnProperty(_.toLower(this.token))) {
+                if (!isClosured(argument)) {
+                    argument += this.appendToken(argument);
+                    continue
+                }
+                if (argument.length > 0) {
+                    this.push(argument);
+                    argument = '';
+                }
+                this.setRoot(this.token);
             }
-            this._s = this._s.substring(subQuery.length+1);
-          } else {
-            argument += ' ' + this.token;
-          }
-        }
-        else if (isCond(this.token) && (rootToken === 'where' || rootToken === 'prewhere')) {
-          if (isClosured(argument)) {
-            ast[rootToken].push(argument);
-            argument = this.token;
-          } else {
-            argument += ' ' + this.token;
-          }
-        }
-        else if (isJoin(this.token)) {
-          let joinType = this.token, source;
-          if (!this.next()) {
-            throw("wrong join signature for `" + joinType + "` at [" + this._s + "]");
-          }
-
-          if (isClosureChars(this.token)) {
-            subQuery = betweenBraces(this._s);
-            source = toAST(subQuery);
-            this._s = this._s.substring(subQuery.length+1);
-          } else {
-            source = [this.token];
-          }
-
-          this.expect('using');
-          ast['join'] = {type: joinType, source: source, using: []};
-          while(this.next()) {debugger
-            if (isStatement(this.token)) {
-              if (argument !== '') {
-                ast[rootToken].push(argument);
+            else if (this.token === ',' && isClosured(argument)) {
+                this.push(argument);
                 argument = '';
-              }
-              rootToken = this.token.toLowerCase();
-              ast[rootToken] = [];
-              break;
+                this.expectedNext = true;
             }
+            else if (isClosureChars(this.token) && this.rootToken === 'from') {
+                subQuery = betweenBraces(this._s);
+                this.tree[this.rootToken] = toAST(subQuery);
+                this._s = this._s.substring(subQuery.length + 1);
+            }
+            else if (isMacroFunc(this.token)) {
+                let func = this.token;
+                if (!this.next()) {
+                    throw("wrong function signature for `" + func + "` at [" + this._s + "]");
+                }
 
-              if (!isID(this.token)) {
-                  continue;
-              }
+                subQuery = betweenBraces(this._s);
+                let subAST = toAST(subQuery);
+                if (isSet(subAST, 'root')) {
+                    this.tree[func] = subAST['root'].map(function (item) {
+                        return item;
+                    });
+                } else {
+                    this.tree[func] = subAST;
+                }
+                this._s = this._s.substring(subQuery.length + 1);
 
-            ast['join'].using.push(this.token);
-          }
-        } else if (isClosureChars(this.token)) {
-          argument += this.token;
-          if (this.token === '(') {
-              expectNextEl = true;
-          }
-        } else if (this.token === '.') {
-          argument += this.token;
-        } else if (this.token === ',') {
-          argument += this.token + ' ';
-          expectNextEl = true;
-        } else {
-          argument += argument === '' || isSkipSpace(argument[argument.length-1]) ? this.token : ' ' + this.token;
-            expectNextEl = false;
+                // macro funcs are used instead of SELECT statement
+                this.tree['select'] = [];
+            }
+            else if (isIn(this.token)) {
+                argument += ' ' + this.token;
+                if (!this.next()) {
+                    throw("wrong in signature for `" + argument + "` at [" + this._s + "]");
+                }
+
+                if (isClosureChars(this.token)) {
+                    subQuery = betweenBraces(this._s);
+                    let subAST = toAST(subQuery);
+                    if (isSet(subAST, 'root')) {
+                        argument += ' (' + subAST['root'].map(function (item) {
+                            return item;
+                        });
+                        argument = argument + ')';
+                    } else {
+                        argument += ' (' + newLine + print(subAST, tabSize) + ')';
+                        this.push(argument);
+                        argument = '';
+                    }
+                    this._s = this._s.substring(subQuery.length + 1);
+                } else {
+                    argument += ' ' + this.token;
+                }
+            }
+            else if (isCond(this.token) && (this.rootToken === 'where' || this.rootToken === 'prewhere')) {
+                if (isClosured(argument)) {
+                    this.push(argument);
+                    argument = this.token;
+                } else {
+                    argument += ' ' + this.token;
+                }
+            }
+            else if (isJoin(this.token)) {
+                let joinType = this.token, source;
+                if (!this.next()) {
+                    throw("wrong join signature for `" + joinType + "` at [" + this._s + "]");
+                }
+
+                if (isClosureChars(this.token)) {
+                    subQuery = betweenBraces(this._s);
+                    source = toAST(subQuery);
+                    this._s = this._s.substring(subQuery.length + 1);
+                } else {
+                    source = [this.token];
+                }
+
+                this.expect('using');
+                this.tree['join'] = {type: joinType, source: source, using: []};
+                while (this.next()) {
+                    if (isStatement(this.token)) {
+                        if (argument !== '') {
+                            this.push(argument);
+                            argument = '';
+                        }
+                        this.setRoot(this.token);
+                        break;
+                    }
+                    if (!isID(this.token)) {
+                        continue;
+                    }
+                    this.tree['join'].using.push(this.token);
+                }
+            } else if (this.rootToken === 'union all') {
+                let statement = 'union all';
+                this._s = this.token + ' ' + this._s;
+                let subQueryPos = this._s.toLowerCase().indexOf(statement);
+                while (subQueryPos !== -1) {
+                    let subQuery = this._s.substring(0, subQueryPos);
+                    let ast = toAST(subQuery);
+                    this.tree[statement].push(ast);
+                    this._s = this._s.substring(subQueryPos + statement.length, this._s.length);
+                    subQueryPos = this._s.toLowerCase().indexOf(statement);
+                }
+                let ast = toAST(this._s);
+                this._s = '';
+                this.tree[statement].push(ast);
+            }
+            else if (isClosureChars(this.token) || this.token === '.') {
+                argument += this.token;
+            } else if (this.token === ',') {
+                argument += this.token + ' ';
+            } else {
+                argument += this.appendToken(argument);
+            }
         }
-      }
 
-      if (argument !== '') {
-        ast[rootToken].push(argument);
-      }
-      this.AST = ast;
-      return ast;
+        if (argument !== '') {
+            this.push(argument);
+        }
+        return this.tree;
     };
-  }
+}
 
-var wsRe = "\\s+",
+let wsRe = "\\s+",
     commentRe = "--[^\n]*|/\\*(?:[^*]|\\*[^/])*\\*/",
     idRe = "[a-zA-Z_][a-zA-Z_0-9]*",
     intRe = "\\d+",
     powerIntRe = "\\d+e\\d+",
     floatRe = "\\d+\\.\\d*|\\d*\\.\\d+|\\d+[eE][-+]\\d+",
     stringRe = "('[^']*')|(`[^`]*`)",
-    binaryOpRe = "=>|\\|\\||>=|<=|==|!=|<>|[-+/%*=<>\\.!]",
-    statementRe = "(select|from|where|having|order by|group by|limit|format|prewhere|union all)",
-    joinsRe = "(any inner join|any left join|all inner join|all left join"+
+    binaryOpRe = "=>|\\|\\||>=|<=|==|!=|<>|->|[-+/%*=<>\\.!]",
+    statementRe = "\\b(select|from|where|having|order by|group by|limit|format|prewhere|union all)\\b",
+    joinsRe = "(any inner join|any left join|all inner join|all left join" +
         "|global any inner join|global any left join|global all inner join|global all left join)",
     macroFuncRe = "(\\$rateColumns|\\$rate|\\$columns)",
     condRe = "\\b(or|and)\\b",
     inRe = "\\b(global in|global not in|not in|in)\\b",
-    closureRe = "[\\(\\)]",
+    closureRe = "[\\(\\)\\[\\]]",
     specCharsRe = "[,?:]",
     macroRe = "\\$[A-Za-z0-9_$]+",
-    skipSpaceRe = "[\\(\\.!]",
+    skipSpaceRe = "[\\(\\.! \\[]",
 
     builtInFuncRe = "\\b(avg|countIf|first|last|max|min|sum|sumIf|ucase|lcase|mid|round|rank|now|" +
         "coalesce|ifnull|isnull|nvl|count|timeSlot|yesterday|today|now|toRelativeSecondNum|" +
@@ -277,7 +297,7 @@ var wsRe = "\\s+",
         "quantilesIf|varSampIf|varPopIf|stddevSampIf|stddevPopIf|covarSampIf|covarPopIf|corrIf|" +
         "uniqArrayIf|sumArrayIf|uniq)\\b",
     operatorRe = "\\b(select|group by|order by|from|where|limit|offset|having|as|" +
-        "when|else|end|type|left|right|on|outer|desc|asc|union|primary|key|between|" +
+        "when|else|end|type|left|right|on|outer|desc|asc|primary|key|between|" +
         "foreign|not|null|inner|cross|natural|database|prewhere|using|global|in)\\b",
     dataTypeRe = "\\b(int|numeric|decimal|date|varchar|char|bigint|float|double|bit|binary|text|set|timestamp|" +
         "money|real|number|integer|" +
@@ -293,7 +313,7 @@ var wsRe = "\\s+",
     joinsOnlyRe = new RegExp("^(?:" + joinsRe + ")$", 'i'),
     operatorOnlyRe = new RegExp("^(?:" + operatorRe + ")$", 'i'),
     dataTypeOnlyRe = new RegExp("^(?:" + dataTypeRe + ")$"),
-    builtInFuncOnlyRe = new RegExp("^(?:"+ builtInFuncRe +")$"),
+    builtInFuncOnlyRe = new RegExp("^(?:" + builtInFuncRe + ")$"),
     macroOnlyRe = new RegExp("^(?:" + macroRe + ")$", 'i'),
     inOnlyRe = new RegExp("^(?:" + inRe + ")$", 'i'),
     condOnlyRe = new RegExp("^(?:" + condRe + ")$", 'i'),
@@ -302,8 +322,8 @@ var wsRe = "\\s+",
     skipSpaceOnlyRe = new RegExp("^(?:" + skipSpaceRe + ")$"),
     binaryOnlyRe = new RegExp("^(?:" + binaryOpRe + ")$");
 
-var tokenRe = [statementRe, macroFuncRe, joinsRe, inRe, wsRe, commentRe, idRe, stringRe, powerIntRe, intRe,
-    floatRe, binaryOpRe, closureRe, specCharsRe, macroRe].join("|");
+var tokenRe = [statementRe, macroFuncRe, joinsRe, inRe, wsRe, commentRe, idRe, stringRe, powerIntRe, floatRe, intRe,
+    binaryOpRe, closureRe, specCharsRe, macroRe].join("|");
 
 function isSkipSpace(token) {
     return skipSpaceOnlyRe.test(token);
@@ -383,7 +403,7 @@ function printItems(items, tab = '', separator = '') {
             result += ' ' + items[0];
         } else {
             result += newLine;
-            items.forEach(function(item, i) {
+            items.forEach(function (item, i) {
                 result += tab + tabSize + item;
                 if (i !== items.length - 1) {
                     result += separator;
@@ -411,23 +431,20 @@ function isClosured(argument) {
     return (argument.match(/\(/g) || []).length === (argument.match(/\)/g) || []).length;
 }
 
-function betweenBraces(query){
+function betweenBraces(query) {
     var openBraces = 1, subQuery = '';
     for (var i = 0; i < query.length; i++) {
         if (query.charAt(i) === '(') {
             openBraces++;
         }
-
         if (query.charAt(i) === ')') {
             if (openBraces === 1) {
                 subQuery = query.substring(0, i);
                 break;
             }
-
             openBraces--;
         }
     }
-
     return subQuery;
 }
 
@@ -444,7 +461,7 @@ function print(AST, tab = '') {
         result += printItems(AST.$columns, tab, ',') + ')';
     }
 
-    if (isSet(AST,'$rateColumns')) {
+    if (isSet(AST, '$rateColumns')) {
         result += tab + '$rateColumns(';
         result += printItems(AST.$rateColumns, tab, ',') + ')';
     }
@@ -460,7 +477,7 @@ function print(AST, tab = '') {
     }
 
     if (isSet(AST, 'join')) {
-        result += tab + newLine + AST.join.type.toUpperCase()  +
+        result += tab + newLine + AST.join.type.toUpperCase() +
             printItems(AST.join.source, tab) +
             ' USING ' + printItems(AST.join.using, tab, ',');
     }
@@ -475,7 +492,7 @@ function print(AST, tab = '') {
         result += printItems(AST.where, tab);
     }
 
-    if (isSet(AST,'group by')) {
+    if (isSet(AST, 'group by')) {
         result += newLine + tab + 'GROUP BY';
         result += printItems(AST['group by'], tab, ',');
     }
@@ -492,12 +509,14 @@ function print(AST, tab = '') {
 
     if (isSet(AST, 'limit')) {
         result += newLine + tab + 'LIMIT';
-        result += printItems(AST.limit, tab);
+        result += printItems(AST.limit, tab, ',');
     }
 
     if (isSet(AST, 'union all')) {
-        result += newLine + tab + 'UNION ALL';
-        result += printItems(AST['union all'], tab);
+        AST['union all'].forEach(function (v) {
+            result += newLine + newLine + tab + 'UNION ALL' + newLine + newLine;
+            result += print(v, tab)
+        })
     }
 
     if (isSet(AST, 'format')) {

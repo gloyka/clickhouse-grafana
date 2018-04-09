@@ -19,8 +19,9 @@ export default class SqlQuery {
     this.options = options;
   }
 
-    replace(options?) {
-        var query = this.target.query,
+    replace(options, adhocFilters) {
+        var self = this,
+            query = this.target.query,
             scanner = new Scanner(query),
             dateTimeType = this.target.dateTimeType ? this.target.dateTimeType : 'DATETIME',
             from = SqlQuery.convertTimestamp(SqlQuery.round(this.options.range.from, this.target.round)),
@@ -29,9 +30,32 @@ export default class SqlQuery {
             timeFilter = SqlQuery.getTimeFilter(this.options.rangeRaw.to === 'now', dateTimeType),
             i = this.templateSrv.replace(this.target.interval, options.scopedVars) || options.interval,
             interval = SqlQuery.convertInterval(i, this.target.intervalFactor || 1);
-
         try {
             let ast = scanner.toAST();
+            if (adhocFilters.length > 0) {
+                if (!ast.hasOwnProperty('where')) {
+                    ast.where = [];
+                }
+                adhocFilters.forEach(function(af) {
+                    let parts = af.key.split('.');
+                    if (parts.length < 3) {
+                        console.log("adhoc filters: filter " + af.key + "` has wrong format");
+                        return
+                    }
+                    if (self.target.database != parts[0] || self.target.table != parts[1]) {
+                        return
+                    }
+                    let operator = SqlQuery.clickhouseOperator(af.operator);
+                    let cond = parts[2] + " " + operator + " " + af.value;
+                    if (ast.where.length > 0) {
+                        // OR is not implemented
+                        // @see https://github.com/grafana/grafana/issues/10918
+                        cond = "AND " + cond
+                    }
+                    ast.where.push(cond)
+                });
+                query = scanner.Print(ast);
+            }
             if (ast.hasOwnProperty('$columns') && !_.isEmpty(ast['$columns'])) {
                 query = SqlQuery.columns(query);
             } else if (ast.hasOwnProperty('$rateColumns') && !_.isEmpty(ast['$rateColumns'])) {
@@ -44,6 +68,7 @@ export default class SqlQuery {
         }
 
         query = this.templateSrv.replace(query, options.scopedVars, SqlQuery.interpolateQueryExpr);
+        query = SqlQuery.unescape(query);
         this.target.rawQuery = query
                     .replace(/\$timeSeries/g, timeSeries)
                     .replace(/\$timeFilter/g, timeFilter)
@@ -256,19 +281,34 @@ export default class SqlQuery {
     }
 
     static interpolateQueryExpr (value, variable, defaultFormatFn) {
-        // if no multi or include all do not regexEscape
+        // if no `multiselect` or `include all` - do not escape
         if (!variable.multi && !variable.includeAll) {
             return value;
         }
-
         if (typeof value === 'string') {
             return SqlQuery.clickhouseEscape(value, variable);
         }
-
-        var escapedValues = _.map(value, function(v){
+        let escapedValues = _.map(value, function(v){
             return SqlQuery.clickhouseEscape(v, variable);
         });
         return escapedValues.join(',');
+    }
+
+    static clickhouseOperator(value) {
+        switch (value){
+            case "=":
+            case "!=":
+            case ">":
+            case "<":
+                return value;
+            case "=~":
+                return "LIKE";
+            case "!~":
+                return "NOT LIKE";
+            default:
+                console.log("adhoc filters: got unsupported operator `" + value + "`");
+                return value
+        }
     }
 
     static clickhouseEscape(value, variable) {
@@ -278,7 +318,6 @@ export default class SqlQuery {
             if (opt.value === '$__all') {
                 return true;
             }
-
             if (!opt.value.match(/^\d+$/)) {
                 isDigit = false;
                 return false;
@@ -291,5 +330,22 @@ export default class SqlQuery {
         } else {
             return "'" + value.replace(/[\\']/g, '\\$&') + "'";
         }
+    }
+
+    static unescape(query) {
+        let macros = '$unescape(';
+        let openMacros = query.indexOf(macros);
+        while (openMacros !== -1) {
+            let closeMacros = query.indexOf(')', openMacros);
+            if(closeMacros === -1) {
+                throw {message: 'unable to find closing brace for $unescape macros: ' + query.substring(0, openMacros)};
+            }
+            let arg = query.substring(openMacros+macros.length, closeMacros)
+                .trim();
+            arg = arg.replace(/[']+/g, '');
+            query = query.substring(0, openMacros) + arg + query.substring(closeMacros+1, query.length);
+            openMacros = query.indexOf('$unescape(');
+        }
+        return query
     }
 }

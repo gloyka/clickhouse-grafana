@@ -153,11 +153,13 @@ System.register(['lodash'], function(exports_1) {
         }
         if (isSet(AST, 'limit')) {
             result += newLine + tab + 'LIMIT';
-            result += printItems(AST.limit, tab);
+            result += printItems(AST.limit, tab, ',');
         }
         if (isSet(AST, 'union all')) {
-            result += newLine + tab + 'UNION ALL';
-            result += printItems(AST['union all'], tab);
+            AST['union all'].forEach(function (v) {
+                result += newLine + newLine + tab + 'UNION ALL' + newLine + newLine;
+                result += print(v, tab);
+            });
         }
         if (isSet(AST, 'format')) {
             result += newLine + tab + 'FORMAT';
@@ -176,7 +178,6 @@ System.register(['lodash'], function(exports_1) {
                 function Scanner(s) {
                     this._sOriginal = s;
                     this.token = null;
-                    this.AST = {};
                 }
                 Scanner.prototype.raw = function () {
                     return this._sOriginal;
@@ -197,14 +198,6 @@ System.register(['lodash'], function(exports_1) {
                     if (!this.next()) {
                         throw ("expecting additional token at the end of query [" + this._sOriginal + "]");
                     }
-                };
-                ;
-                Scanner.prototype.prev = function () {
-                    if (this.token === null) {
-                        throw ("BUG: prev called on empty token");
-                    }
-                    this._s = this.token + " " + this._s;
-                    this.token = null;
                 };
                 ;
                 Scanner.prototype.next = function () {
@@ -239,31 +232,56 @@ System.register(['lodash'], function(exports_1) {
                     return print(this.toAST());
                 };
                 ;
+                Scanner.prototype.Print = function (ast) {
+                    return print(ast);
+                };
+                Scanner.prototype.push = function (argument) {
+                    this.tree[this.rootToken].push(argument);
+                    this.expectedNext = false;
+                };
+                Scanner.prototype.setRoot = function (token) {
+                    this.rootToken = token.toLowerCase();
+                    this.tree[this.rootToken] = [];
+                    this.expectedNext = true;
+                };
+                Scanner.prototype.isExpectedNext = function () {
+                    var v = this.expectedNext;
+                    this.expectedNext = false;
+                    return v;
+                };
+                Scanner.prototype.appendToken = function (argument) {
+                    return (argument === '' || isSkipSpace(argument[argument.length - 1]))
+                        ? this.token
+                        : ' ' + this.token;
+                };
                 Scanner.prototype.toAST = function () {
                     this._s = this._sOriginal;
+                    this.tree = {};
+                    this.setRoot('root');
+                    this.expectedNext = false;
                     this.skipSpace = true;
                     this.re = new RegExp("^(?:" + tokenRe + ")", 'i');
-                    var rootToken = 'root', subQuery = '', argument = '', ast = {}, subAST = {}, expectNextEl = false;
-                    ast[rootToken] = [];
+                    var subQuery = '', argument = '';
                     while (this.next()) {
-                        if (isStatement(this.token) && !ast.hasOwnProperty(lodash_1.default.toLower(this.token)) && !expectNextEl) {
-                            if (argument.length > 0) {
-                                ast[rootToken].push(argument);
-                                argument = '';
-                                expectNextEl = false;
+                        if (!this.isExpectedNext() && isStatement(this.token) && !this.tree.hasOwnProperty(lodash_1.default.toLower(this.token))) {
+                            if (!isClosured(argument)) {
+                                argument += this.appendToken(argument);
+                                continue;
                             }
-                            rootToken = lodash_1.default.toLower(this.token);
-                            ast[rootToken] = [];
-                            expectNextEl = true;
+                            if (argument.length > 0) {
+                                this.push(argument);
+                                argument = '';
+                            }
+                            this.setRoot(this.token);
                         }
                         else if (this.token === ',' && isClosured(argument)) {
-                            ast[rootToken].push(argument);
+                            this.push(argument);
                             argument = '';
-                            expectNextEl = true;
+                            this.expectedNext = true;
                         }
-                        else if (isClosureChars(this.token) && rootToken === 'from') {
+                        else if (isClosureChars(this.token) && this.rootToken === 'from') {
                             subQuery = betweenBraces(this._s);
-                            ast[rootToken] = toAST(subQuery);
+                            this.tree[this.rootToken] = toAST(subQuery);
                             this._s = this._s.substring(subQuery.length + 1);
                         }
                         else if (isMacroFunc(this.token)) {
@@ -272,18 +290,18 @@ System.register(['lodash'], function(exports_1) {
                                 throw ("wrong function signature for `" + func + "` at [" + this._s + "]");
                             }
                             subQuery = betweenBraces(this._s);
-                            subAST = toAST(subQuery);
+                            var subAST = toAST(subQuery);
                             if (isSet(subAST, 'root')) {
-                                ast[func] = subAST['root'].map(function (item) {
+                                this.tree[func] = subAST['root'].map(function (item) {
                                     return item;
                                 });
                             }
                             else {
-                                ast[func] = subAST;
+                                this.tree[func] = subAST;
                             }
                             this._s = this._s.substring(subQuery.length + 1);
                             // macro funcs are used instead of SELECT statement
-                            ast['select'] = [];
+                            this.tree['select'] = [];
                         }
                         else if (isIn(this.token)) {
                             argument += ' ' + this.token;
@@ -292,7 +310,7 @@ System.register(['lodash'], function(exports_1) {
                             }
                             if (isClosureChars(this.token)) {
                                 subQuery = betweenBraces(this._s);
-                                subAST = toAST(subQuery);
+                                var subAST = toAST(subQuery);
                                 if (isSet(subAST, 'root')) {
                                     argument += ' (' + subAST['root'].map(function (item) {
                                         return item;
@@ -301,7 +319,7 @@ System.register(['lodash'], function(exports_1) {
                                 }
                                 else {
                                     argument += ' (' + newLine + print(subAST, tabSize) + ')';
-                                    ast[rootToken].push(argument);
+                                    this.push(argument);
                                     argument = '';
                                 }
                                 this._s = this._s.substring(subQuery.length + 1);
@@ -310,9 +328,9 @@ System.register(['lodash'], function(exports_1) {
                                 argument += ' ' + this.token;
                             }
                         }
-                        else if (isCond(this.token) && (rootToken === 'where' || rootToken === 'prewhere')) {
+                        else if (isCond(this.token) && (this.rootToken === 'where' || this.rootToken === 'prewhere')) {
                             if (isClosured(argument)) {
-                                ast[rootToken].push(argument);
+                                this.push(argument);
                                 argument = this.token;
                             }
                             else {
@@ -333,54 +351,58 @@ System.register(['lodash'], function(exports_1) {
                                 source = [this.token];
                             }
                             this.expect('using');
-                            ast['join'] = { type: joinType, source: source, using: [] };
+                            this.tree['join'] = { type: joinType, source: source, using: [] };
                             while (this.next()) {
-                                debugger;
                                 if (isStatement(this.token)) {
                                     if (argument !== '') {
-                                        ast[rootToken].push(argument);
+                                        this.push(argument);
                                         argument = '';
                                     }
-                                    rootToken = this.token.toLowerCase();
-                                    ast[rootToken] = [];
+                                    this.setRoot(this.token);
                                     break;
                                 }
                                 if (!isID(this.token)) {
                                     continue;
                                 }
-                                ast['join'].using.push(this.token);
+                                this.tree['join'].using.push(this.token);
                             }
                         }
-                        else if (isClosureChars(this.token)) {
-                            argument += this.token;
-                            if (this.token === '(') {
-                                expectNextEl = true;
+                        else if (this.rootToken === 'union all') {
+                            var statement = 'union all';
+                            this._s = this.token + ' ' + this._s;
+                            var subQueryPos = this._s.toLowerCase().indexOf(statement);
+                            while (subQueryPos !== -1) {
+                                var subQuery_1 = this._s.substring(0, subQueryPos);
+                                var ast_1 = toAST(subQuery_1);
+                                this.tree[statement].push(ast_1);
+                                this._s = this._s.substring(subQueryPos + statement.length, this._s.length);
+                                subQueryPos = this._s.toLowerCase().indexOf(statement);
                             }
+                            var ast = toAST(this._s);
+                            this._s = '';
+                            this.tree[statement].push(ast);
                         }
-                        else if (this.token === '.') {
+                        else if (isClosureChars(this.token) || this.token === '.') {
                             argument += this.token;
                         }
                         else if (this.token === ',') {
                             argument += this.token + ' ';
-                            expectNextEl = true;
                         }
                         else {
-                            argument += argument === '' || isSkipSpace(argument[argument.length - 1]) ? this.token : ' ' + this.token;
-                            expectNextEl = false;
+                            argument += this.appendToken(argument);
                         }
                     }
                     if (argument !== '') {
-                        ast[rootToken].push(argument);
+                        this.push(argument);
                     }
-                    this.AST = ast;
-                    return ast;
+                    return this.tree;
                 };
                 ;
                 return Scanner;
             })();
             exports_1("default", Scanner);
-            wsRe = "\\s+", commentRe = "--[^\n]*|/\\*(?:[^*]|\\*[^/])*\\*/", idRe = "[a-zA-Z_][a-zA-Z_0-9]*", intRe = "\\d+", powerIntRe = "\\d+e\\d+", floatRe = "\\d+\\.\\d*|\\d*\\.\\d+|\\d+[eE][-+]\\d+", stringRe = "('[^']*')|(`[^`]*`)", binaryOpRe = "=>|\\|\\||>=|<=|==|!=|<>|[-+/%*=<>\\.!]", statementRe = "(select|from|where|having|order by|group by|limit|format|prewhere|union all)", joinsRe = "(any inner join|any left join|all inner join|all left join" +
-                "|global any inner join|global any left join|global all inner join|global all left join)", macroFuncRe = "(\\$rateColumns|\\$rate|\\$columns)", condRe = "\\b(or|and)\\b", inRe = "\\b(global in|global not in|not in|in)\\b", closureRe = "[\\(\\)]", specCharsRe = "[,?:]", macroRe = "\\$[A-Za-z0-9_$]+", skipSpaceRe = "[\\(\\.!]", builtInFuncRe = "\\b(avg|countIf|first|last|max|min|sum|sumIf|ucase|lcase|mid|round|rank|now|" +
+            wsRe = "\\s+", commentRe = "--[^\n]*|/\\*(?:[^*]|\\*[^/])*\\*/", idRe = "[a-zA-Z_][a-zA-Z_0-9]*", intRe = "\\d+", powerIntRe = "\\d+e\\d+", floatRe = "\\d+\\.\\d*|\\d*\\.\\d+|\\d+[eE][-+]\\d+", stringRe = "('[^']*')|(`[^`]*`)", binaryOpRe = "=>|\\|\\||>=|<=|==|!=|<>|->|[-+/%*=<>\\.!]", statementRe = "\\b(select|from|where|having|order by|group by|limit|format|prewhere|union all)\\b", joinsRe = "(any inner join|any left join|all inner join|all left join" +
+                "|global any inner join|global any left join|global all inner join|global all left join)", macroFuncRe = "(\\$rateColumns|\\$rate|\\$columns)", condRe = "\\b(or|and)\\b", inRe = "\\b(global in|global not in|not in|in)\\b", closureRe = "[\\(\\)\\[\\]]", specCharsRe = "[,?:]", macroRe = "\\$[A-Za-z0-9_$]+", skipSpaceRe = "[\\(\\.! \\[]", builtInFuncRe = "\\b(avg|countIf|first|last|max|min|sum|sumIf|ucase|lcase|mid|round|rank|now|" +
                 "coalesce|ifnull|isnull|nvl|count|timeSlot|yesterday|today|now|toRelativeSecondNum|" +
                 "toRelativeMinuteNum|toRelativeHourNum|toRelativeDayNum|toRelativeWeekNum|toRelativeMonthNum|" +
                 "toRelativeYearNum|toTime|toStartOfHour|toStartOfFiveMinute|toStartOfMinute|toStartOfYear|" +
@@ -414,13 +436,13 @@ System.register(['lodash'], function(exports_1) {
                 "quantilesTimingIf|argMinIf|uniqArray|sumArray|quantilesTimingArrayIf|uniqArrayIf|medianIf|" +
                 "quantilesIf|varSampIf|varPopIf|stddevSampIf|stddevPopIf|covarSampIf|covarPopIf|corrIf|" +
                 "uniqArrayIf|sumArrayIf|uniq)\\b", operatorRe = "\\b(select|group by|order by|from|where|limit|offset|having|as|" +
-                "when|else|end|type|left|right|on|outer|desc|asc|union|primary|key|between|" +
+                "when|else|end|type|left|right|on|outer|desc|asc|primary|key|between|" +
                 "foreign|not|null|inner|cross|natural|database|prewhere|using|global|in)\\b", dataTypeRe = "\\b(int|numeric|decimal|date|varchar|char|bigint|float|double|bit|binary|text|set|timestamp|" +
                 "money|real|number|integer|" +
                 "uint8|uint16|uint32|uint64|int8|int16|int32|int64|float32|float64|datetime|enum8|enum16|" +
                 "array|tuple|string)\\b", wsOnlyRe = new RegExp("^(?:" + wsRe + ")$"), commentOnlyRe = new RegExp("^(?:" + commentRe + ")$"), idOnlyRe = new RegExp("^(?:" + idRe + ")$"), closureOnlyRe = new RegExp("^(?:" + closureRe + ")$"), macroFuncOnlyRe = new RegExp("^(?:" + macroFuncRe + ")$"), statementOnlyRe = new RegExp("^(?:" + statementRe + ")$", 'i'), joinsOnlyRe = new RegExp("^(?:" + joinsRe + ")$", 'i'), operatorOnlyRe = new RegExp("^(?:" + operatorRe + ")$", 'i'), dataTypeOnlyRe = new RegExp("^(?:" + dataTypeRe + ")$"), builtInFuncOnlyRe = new RegExp("^(?:" + builtInFuncRe + ")$"), macroOnlyRe = new RegExp("^(?:" + macroRe + ")$", 'i'), inOnlyRe = new RegExp("^(?:" + inRe + ")$", 'i'), condOnlyRe = new RegExp("^(?:" + condRe + ")$", 'i'), numOnlyRe = new RegExp("^(?:" + [powerIntRe, intRe, floatRe].join("|") + ")$"), stringOnlyRe = new RegExp("^(?:" + stringRe + ")$"), skipSpaceOnlyRe = new RegExp("^(?:" + skipSpaceRe + ")$"), binaryOnlyRe = new RegExp("^(?:" + binaryOpRe + ")$");
-            tokenRe = [statementRe, macroFuncRe, joinsRe, inRe, wsRe, commentRe, idRe, stringRe, powerIntRe, intRe,
-                floatRe, binaryOpRe, closureRe, specCharsRe, macroRe].join("|");
+            tokenRe = [statementRe, macroFuncRe, joinsRe, inRe, wsRe, commentRe, idRe, stringRe, powerIntRe, floatRe, intRe,
+                binaryOpRe, closureRe, specCharsRe, macroRe].join("|");
             tabSize = '    ', newLine = '\n';
         }
     }
