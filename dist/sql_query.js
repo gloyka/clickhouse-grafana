@@ -68,6 +68,7 @@ System.register(['lodash', 'app/core/utils/datemath', 'moment', './scanner'], fu
                     }
                     query = this.templateSrv.replace(query, options.scopedVars, SqlQuery.interpolateQueryExpr);
                     query = SqlQuery.unescape(query);
+                    query = SqlQuery.applyFieldFilters(query);
                     this.target.rawQuery = query
                         .replace(/\$timeSeries/g, timeSeries)
                         .replace(/\$timeFilter/g, timeFilter)
@@ -305,6 +306,32 @@ System.register(['lodash', 'app/core/utils/datemath', 'moment', './scanner'], fu
                         arg = arg.replace(/[']+/g, '');
                         query = query.substring(0, openMacros) + arg + query.substring(closeMacros + 1, query.length);
                         openMacros = query.indexOf('$unescape(');
+                    }
+                    return query;
+                };
+                SqlQuery.applyFieldFilters = function (query) {
+                    var macros = '$fieldFilter(';
+                    var customAllValue = '*';
+                    var openMacros = query.indexOf(macros);
+                    while (openMacros !== -1) {
+                        var commaMacros = query.indexOf(',', openMacros);
+                        if (commaMacros === -1) {
+                            throw { message: 'unable to find comma for $field_filter macros: ' + query.substring(0, openMacros) };
+                        }
+                        var argFieldName = query.substring(openMacros + macros.length, commaMacros).trim();
+
+                        var closeMacros = query.indexOf(')', commaMacros);
+                        if (closeMacros === -1) {
+                            throw { message: 'unable to find closing brace for $field_filter macros: ' + query.substring(0, openMacros) };
+                        }
+                        var argValues = query.substring(commaMacros + 1, closeMacros).trim();
+                        if (argValues === customAllValue) {
+                            filterString = '1'
+                        } else {
+                            filterString = argFieldName + ' in (' + argValues + ')'                            
+                        }
+                        query = query.substring(0, openMacros) + filterString + query.substring(closeMacros + 1, query.length);
+                        openMacros = query.indexOf(macros);
                     }
                     return query;
                 };
