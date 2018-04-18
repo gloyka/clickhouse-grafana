@@ -311,7 +311,7 @@ System.register(['lodash', 'app/core/utils/datemath', 'moment', './scanner'], fu
                 };
                 SqlQuery.applyFieldFilters = function (query) {
                     var macros = '$fieldFilter(';
-                    var customAllValue = '*';
+                    var customAllValue = "''";
                     var openMacros = query.indexOf(macros);
                     while (openMacros !== -1) {
                         var commaMacros = query.indexOf(',', openMacros);
