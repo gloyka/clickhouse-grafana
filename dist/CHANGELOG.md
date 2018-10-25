@@ -1,3 +1,39 @@
+# 1.7.0 (2018-09-05)
+
+## New Features
+
+* provide $adhoc macros for using ad-hoc filters in inner queries (thx to @vavrusa)
+* allow to set custom query for ad-hoc filter via `adhoc_query_filter` variable
+* provide new `Round` value `$step` for auto-rounding according to graph resolution changes
+
+
+# 1.6.0 (2018-08-07)
+
+## New Features
+
+* annotations support (txh to @atsirin)
+* allow to use `$from` and `$to` macroses in variable queries
+* provisioning config example in README
+
+
+# 1.5.1 (2018-06-05)
+
+## Fixes
+
+* optimize memory use for range time series (thx to @vavrusa)
+* apply ad-hoc filters on inner subqueries (thx to @vavrusa)
+
+
+# 1.5.0 (2018-05-31)
+
+## New Features
+
+* new datasource setting - `default database`. If set it will be prefilled in the query builder, and used to make ad-hoc filters more convenient (thx to @vavrusa)
+* support wildcard ad-hoc filters for dashboards using multiple tables (thx to @vavrusa)
+* parse dimensions from GROUP BY to simplify querying (see [piechart](https://github.com/Vertamedia/clickhouse-grafana#piechart-httpsgrafanacompluginsgrafana-piechart-panel) and [worldmap](https://github.com/Vertamedia/clickhouse-grafana#worldmap-panel-httpsgithubcomgrafanaworldmap-panel) examples) (thx to @vavrusa)
+* `$timeCol` to `$dateCol` renamed to be more clear with column types (thx to @simPod)
+
+
 # 1.4.3 (2018-04-09)
 
 ## Fixes

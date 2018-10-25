@@ -6,6 +6,9 @@ import SqlSeries from './sql_series';
 import SqlQuery from './sql_query';
 import ResponseParser from './response_parser';
 import AdhocCtrl from './adhoc';
+import Scanner from './scanner';
+
+const adhocFilterVariable = 'adhoc_query_filter';
 
 export class ClickHouseDatasource {
   type: string;
@@ -16,6 +19,7 @@ export class ClickHouseDatasource {
   basicAuth: any;
   withCredentials: any;
   usePOST: boolean;
+  defaultDatabase: string;
   addCorsHeader: boolean;
   responseParser: any;
   adhocCtrl: AdhocCtrl;
@@ -28,14 +32,15 @@ export class ClickHouseDatasource {
       this.type = 'clickhouse';
       this.name = instanceSettings.name;
       this.supportMetrics = true;
-      this.responseParser = new ResponseParser();
+      this.responseParser = new ResponseParser(this.$q);
       this.url = instanceSettings.url;
       this.directUrl = instanceSettings.directUrl;
       this.basicAuth = instanceSettings.basicAuth;
       this.withCredentials = instanceSettings.withCredentials;
       this.addCorsHeader = instanceSettings.jsonData.addCorsHeader;
       this.usePOST = instanceSettings.jsonData.usePOST;
-      this.adhocCtrl = new AdhocCtrl();
+      this.defaultDatabase = instanceSettings.jsonData.defaultDatabase || '';
+      this.adhocCtrl = new AdhocCtrl(this);
     }
 
     _request(query) {
@@ -75,13 +80,20 @@ export class ClickHouseDatasource {
 
     query(options) {
         var queries = [], q,
-            adhocFilters = this.templateSrv.getAdhocFilters(this.name);
+            adhocFilters = this.templateSrv.getAdhocFilters(this.name),
+            keyColumns = [];
 
         _.map(options.targets, (target) => {
             if (!target.hide && target.query) {
                 var queryModel = new SqlQuery(target, this.templateSrv, options);
                 q = queryModel.replace(options, adhocFilters);
                 queries.push(q);
+                try {
+                    let queryAST = new Scanner(q).toAST();
+                    keyColumns.push(queryAST['group by'] || []);
+                } catch (err) {
+                    console.log('AST parser error: ', err)
+                }
             }
         });
 
@@ -101,6 +113,8 @@ export class ClickHouseDatasource {
             var result = [], i = 0;
             _.each(responses, (response) => {
                 var target = options.targets[i];
+                var keys = keyColumns[i];
+
                 i++;
                 if (!response || !response.rows) {
                     return;
@@ -109,6 +123,7 @@ export class ClickHouseDatasource {
                 var sqlSeries = new SqlSeries({
                     series: response.data,
                     meta: response.meta,
+                    keys: keys,
                     tillNow: options.rangeRaw.to === 'now',
                     from: SqlQuery.convertTimestamp(options.range.from),
                     to: SqlQuery.convertTimestamp(options.range.to)
@@ -127,9 +142,45 @@ export class ClickHouseDatasource {
         });
     };
 
-    metricFindQuery(query) {
+    annotationQuery(options) {
+        if (!options.annotation.query) {
+            return this.$q.reject({
+                message: 'Query missing in annotation definition',
+            });
+        }
+
+        const params = Object.assign({
+            annotation: {
+                dateTimeColDataType: 'time'
+            },
+            interval: '30s'
+        }, options);
+        let queryModel;
+        let query;
+
+        queryModel = new SqlQuery(params.annotation, this.templateSrv, params);
+        queryModel = queryModel.replace(params, []);
+        query = queryModel.replace(/(?:\r\n|\r|\n)/g, ' ');
+        query += ' FORMAT JSON';
+
+        return this.backendSrv
+            .datasourceRequest({
+                url: this.url,
+                method: 'POST',
+                data: query
+            })
+            .then(result => this.responseParser.transformAnnotationResponse(params, result.data));
+    }
+
+    metricFindQuery(query, options?:any) {
         var interpolated;
         try {
+            if (options && options.range) {
+                let from = SqlQuery.convertTimestamp(options.range.from);
+                let to = SqlQuery.convertTimestamp(options.range.to);
+                query = query.replace(/\$to/g, to)
+                    .replace(/\$from/g, from)
+            }
             interpolated = this.templateSrv.replace(query, {}, SqlQuery.interpolateQueryExpr);
         } catch (err) {
             return this.$q.reject(err);
@@ -152,14 +203,21 @@ export class ClickHouseDatasource {
         return this._request(query);
     };
 
-
     targetContainsTemplate(target) {
         return this.templateSrv.variableExists(target.expr);
     };
 
     getTagKeys() {
-        return this.adhocCtrl.GetTagKeys(this);
-
+        // check whether variable `adhoc_query_filter` exists to apply additional filtering
+        // @see https://github.com/Vertamedia/clickhouse-grafana/issues/75
+        // @see https://github.com/grafana/grafana/issues/13109
+        let queryFilter = '';
+        _.each(this.templateSrv.variables, (v) => {
+            if (v.name === adhocFilterVariable) {
+                queryFilter = v.query
+            }
+        });
+        return this.adhocCtrl.GetTagKeys(queryFilter);
     }
 
     getTagValues(options) {

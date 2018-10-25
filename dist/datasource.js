@@ -1,7 +1,7 @@
 ///<reference path="../node_modules/grafana-sdk-mocks/app/headers/common.d.ts" />
-System.register(['lodash', './sql_series', './sql_query', './response_parser', './adhoc'], function(exports_1) {
-    var lodash_1, sql_series_1, sql_query_1, response_parser_1, adhoc_1;
-    var ClickHouseDatasource;
+System.register(['lodash', './sql_series', './sql_query', './response_parser', './adhoc', './scanner'], function(exports_1) {
+    var lodash_1, sql_series_1, sql_query_1, response_parser_1, adhoc_1, scanner_1;
+    var adhocFilterVariable, ClickHouseDatasource;
     return {
         setters:[
             function (lodash_1_1) {
@@ -18,8 +18,12 @@ System.register(['lodash', './sql_series', './sql_query', './response_parser', '
             },
             function (adhoc_1_1) {
                 adhoc_1 = adhoc_1_1;
+            },
+            function (scanner_1_1) {
+                scanner_1 = scanner_1_1;
             }],
         execute: function() {
+            adhocFilterVariable = 'adhoc_query_filter';
             ClickHouseDatasource = (function () {
                 /** @ngInject */
                 function ClickHouseDatasource(instanceSettings, $q, backendSrv, templateSrv) {
@@ -29,14 +33,15 @@ System.register(['lodash', './sql_series', './sql_query', './response_parser', '
                     this.type = 'clickhouse';
                     this.name = instanceSettings.name;
                     this.supportMetrics = true;
-                    this.responseParser = new response_parser_1.default();
+                    this.responseParser = new response_parser_1.default(this.$q);
                     this.url = instanceSettings.url;
                     this.directUrl = instanceSettings.directUrl;
                     this.basicAuth = instanceSettings.basicAuth;
                     this.withCredentials = instanceSettings.withCredentials;
                     this.addCorsHeader = instanceSettings.jsonData.addCorsHeader;
                     this.usePOST = instanceSettings.jsonData.usePOST;
-                    this.adhocCtrl = new adhoc_1.default();
+                    this.defaultDatabase = instanceSettings.jsonData.defaultDatabase || '';
+                    this.adhocCtrl = new adhoc_1.default(this);
                 }
                 ClickHouseDatasource.prototype._request = function (query) {
                     var options = {
@@ -72,12 +77,19 @@ System.register(['lodash', './sql_series', './sql_query', './response_parser', '
                 ;
                 ClickHouseDatasource.prototype.query = function (options) {
                     var _this = this;
-                    var queries = [], q, adhocFilters = this.templateSrv.getAdhocFilters(this.name);
+                    var queries = [], q, adhocFilters = this.templateSrv.getAdhocFilters(this.name), keyColumns = [];
                     lodash_1.default.map(options.targets, function (target) {
                         if (!target.hide && target.query) {
                             var queryModel = new sql_query_1.default(target, _this.templateSrv, options);
                             q = queryModel.replace(options, adhocFilters);
                             queries.push(q);
+                            try {
+                                var queryAST = new scanner_1.default(q).toAST();
+                                keyColumns.push(queryAST['group by'] || []);
+                            }
+                            catch (err) {
+                                console.log('AST parser error: ', err);
+                            }
                         }
                     });
                     // No valid targets, return the empty result to save a round trip.
@@ -93,6 +105,7 @@ System.register(['lodash', './sql_series', './sql_query', './response_parser', '
                         var result = [], i = 0;
                         lodash_1.default.each(responses, function (response) {
                             var target = options.targets[i];
+                            var keys = keyColumns[i];
                             i++;
                             if (!response || !response.rows) {
                                 return;
@@ -100,6 +113,7 @@ System.register(['lodash', './sql_series', './sql_query', './response_parser', '
                             var sqlSeries = new sql_series_1.default({
                                 series: response.data,
                                 meta: response.meta,
+                                keys: keys,
                                 tillNow: options.rangeRaw.to === 'now',
                                 from: sql_query_1.default.convertTimestamp(options.range.from),
                                 to: sql_query_1.default.convertTimestamp(options.range.to)
@@ -119,9 +133,42 @@ System.register(['lodash', './sql_series', './sql_query', './response_parser', '
                     });
                 };
                 ;
-                ClickHouseDatasource.prototype.metricFindQuery = function (query) {
+                ClickHouseDatasource.prototype.annotationQuery = function (options) {
+                    var _this = this;
+                    if (!options.annotation.query) {
+                        return this.$q.reject({
+                            message: 'Query missing in annotation definition',
+                        });
+                    }
+                    var params = Object.assign({
+                        annotation: {
+                            dateTimeColDataType: 'time'
+                        },
+                        interval: '30s'
+                    }, options);
+                    var queryModel;
+                    var query;
+                    queryModel = new sql_query_1.default(params.annotation, this.templateSrv, params);
+                    queryModel = queryModel.replace(params, []);
+                    query = queryModel.replace(/(?:\r\n|\r|\n)/g, ' ');
+                    query += ' FORMAT JSON';
+                    return this.backendSrv
+                        .datasourceRequest({
+                        url: this.url,
+                        method: 'POST',
+                        data: query
+                    })
+                        .then(function (result) { return _this.responseParser.transformAnnotationResponse(params, result.data); });
+                };
+                ClickHouseDatasource.prototype.metricFindQuery = function (query, options) {
                     var interpolated;
                     try {
+                        if (options && options.range) {
+                            var from = sql_query_1.default.convertTimestamp(options.range.from);
+                            var to = sql_query_1.default.convertTimestamp(options.range.to);
+                            query = query.replace(/\$to/g, to)
+                                .replace(/\$from/g, from);
+                        }
                         interpolated = this.templateSrv.replace(query, {}, sql_query_1.default.interpolateQueryExpr);
                     }
                     catch (err) {
@@ -148,7 +195,16 @@ System.register(['lodash', './sql_series', './sql_query', './response_parser', '
                 };
                 ;
                 ClickHouseDatasource.prototype.getTagKeys = function () {
-                    return this.adhocCtrl.GetTagKeys(this);
+                    // check whether variable `adhoc_query_filter` exists to apply additional filtering
+                    // @see https://github.com/Vertamedia/clickhouse-grafana/issues/75
+                    // @see https://github.com/grafana/grafana/issues/13109
+                    var queryFilter = '';
+                    lodash_1.default.each(this.templateSrv.variables, function (v) {
+                        if (v.name === adhocFilterVariable) {
+                            queryFilter = v.query;
+                        }
+                    });
+                    return this.adhocCtrl.GetTagKeys(queryFilter);
                 };
                 ClickHouseDatasource.prototype.getTagValues = function (options) {
                     return this.adhocCtrl.GetTagValues(options);

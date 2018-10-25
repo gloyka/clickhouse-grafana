@@ -12,6 +12,7 @@ export declare class ClickHouseDatasource {
     basicAuth: any;
     withCredentials: any;
     usePOST: boolean;
+    defaultDatabase: string;
     addCorsHeader: boolean;
     responseParser: any;
     adhocCtrl: AdhocCtrl;
@@ -19,7 +20,8 @@ export declare class ClickHouseDatasource {
     constructor(instanceSettings: any, $q: any, backendSrv: any, templateSrv: any);
     _request(query: any): any;
     query(options: any): any;
-    metricFindQuery(query: any): any;
+    annotationQuery(options: any): any;
+    metricFindQuery(query: any, options?: any): any;
     testDatasource(): any;
     _seriesQuery(query: any): any;
     targetContainsTemplate(target: any): any;

@@ -21,6 +21,7 @@ Copy files to your [Grafana plugin directory](http://docs.grafana.org/plugins/in
  * Table view
  * SingleStat view
  * Ad-hoc filters
+ * Annotations
 
 
 ### Access to CH via HTTP
@@ -76,7 +77,7 @@ Under the Editor you can find a raw query (all macros and functions have already
 Plugin supports the following marcos:
 
 * $table - replaced with selected table name from Query Builder
-* $timeCol - replaced with Date:Col value from Query Builder
+* $dateCol - replaced with Date:Col value from Query Builder
 * $dateTimeCol - replaced with Column:DateTime or Column:TimeStamp value from Query Builder
 * $from - replaced with timestamp/1000 value of selected "Time Range:From"
 * $to - replaced with timestamp/1000 value of selected "Time Range:To"
@@ -85,7 +86,7 @@ Plugin supports the following marcos:
   Require Column:Date and Column:DateTime or Column:TimeStamp to be selected
 * $timeSeries - replaced with special ClickHouse construction to convert results as time-series data. Use it as "SELECT $timeSeries...". 
 * $unescape - unescapes variable value by removing single quotes. Used for multiple-value string variables: "SELECT $unescape($column) FROM requests WHERE $unescape($column) = 5"
-Require Column:DateTime or Column:TimeStamp to be selected
+* $adhoc - replaced with a rendered ad-hoc filter expression, or "1" if no ad-hoc filters exist. Since ad-hoc applies automatically only to outer queries the macros can be used for filtering in inner queries.
 
 A description of macros is available by typing their names in Raw Editor
 
@@ -220,43 +221,32 @@ Top5:
 ```
 SELECT
     1, /* fake timestamp value */
-    groupArray((UserName,  Reqs))
-FROM
-(
-    SELECT
-        UserName,
-        sum(Reqs) AS Reqs
-    FROM requests
-    GROUP BY UserName
-    ORDER BY Reqs desc
-    LIMIT 5
-)
+    UserName,
+    sum(Reqs) AS Reqs
+FROM requests
+GROUP BY UserName
+ORDER BY Reqs desc
+LIMIT 5
 ```
 
 Other:
 ```
 SELECT
     1, /* fake timestamp value */
-    tuple(tuple('Other',  sum(Reqs)))
-FROM
-(
-    SELECT
-        UserName,
-        sum(Reqs) AS Reqs
-    FROM requests
-    GROUP BY UserName
-    ORDER BY Reqs desc
-    LIMIT 5,10000000000000 /* select some ridiculous number after first 5 */
-)
+    UserName,
+    sum(Reqs) AS Reqs
+FROM requests
+GROUP BY UserName
+ORDER BY Reqs
+LIMIT 5,10000000000000 /* select some ridiculous number after first 5 */
 ```
 
-### Table (https://grafana.com/plugins/table)
+#### Table (https://grafana.com/plugins/table)
 
-There are no any tricks in displaying time-series data. But to display some summary we will need to fake timestamp data:
+There are no any tricks in displaying time-series data. To print summary data, omit time column, and format the result as "Table".
 
 ```
 SELECT
-    rand() Time, /* fake timestamp value */
     UserName,
     sum(Reqs) as Reqs
 FROM requests
@@ -266,10 +256,7 @@ ORDER BY
     Reqs
 ```
 
-Better to hide `Time` column at `Options` tab while editing panel
-
-
-### Vertical histogram (https://grafana.com/plugins/graph)
+#### Vertical histogram (https://grafana.com/plugins/graph)
 
 ![vertical histogram](https://cloud.githubusercontent.com/assets/2902918/25392561/9f3777e0-29e1-11e7-8b23-2ea9ae46a029.png)
 
@@ -287,20 +274,109 @@ FROM some_table
 
 // It is also possible to use query without macros
 
+
+#### Worldmap panel (https://github.com/grafana/worldmap-panel)
+
+![worldmap](https://user-images.githubusercontent.com/2902918/39430337-47513f4c-4c96-11e8-981d-04533538abec.png)
+
+If you have a table with country/city codes:
+```
+SELECT
+    1,
+    CountryCode AS c,
+    sum(requests) AS Reqs
+FROM requests
+GLOBAL ANY INNER JOIN
+(
+    SELECT Country country, CountryCode
+    FROM countries
+) USING (country)
+WHERE $timeFilter
+GROUP BY
+    c
+ORDER BY Reqs DESC
+```
+
+If you are using [geohash](https://github.com/grafana/worldmap-panel#geohashes-as-the-data-source) set following options:
+
+![Format](https://user-images.githubusercontent.com/2902918/32726398-96793438-c881-11e7-84b8-26e82dbdb40c.png)
+
+And make following query with `Table` formatting:
+
+![geohash-query](https://user-images.githubusercontent.com/2902918/32726399-96a01e86-c881-11e7-9368-61207bae72fd.png)
+
+
 ### Ad-hoc filters
 
 If there is an Ad-hoc variable, plugin will fetch all columns of all tables of all databases (except system database) as tags.
-So in dropdown menu will be options like `database.table.column`. If there are ENUM columns,
+So in dropdown menu will be options like `database.table.column`. If the default database is specified, it will only fetch tables and columns from that database, and the dropdown menu will have option like `table.column`. If there are ENUM columns,
 plugin will fetch their options and use them as tag values.
 
 Plugin will apply Ad-hoc filters to all queries on the dashboard if their settings `$database` and `$table` are the same
-as Ad-hoc's `database.table`
+as Ad-hoc's `database.table`. If the ad-hoc filter doesn't specify table, it will apply to all queries regardless of the table.
+This is useful if the dashboard contains queries to multiple different tables.
 
 ![ad-hoc](https://user-images.githubusercontent.com/2902918/37139531-ed67f222-22b6-11e8-8815-9268850f16fb.png)
 
 > There are no option to apply OR operator for multiple Ad-hoc filters - see grafana/grafana#10918
 
 > There are no option to use IN operator for Ad-hoc filters due to Grafana limitations
+
+There may be cases when CH contains too many tables and columns so their fetching could take notably amount of time. And if you need
+to have multiple dashboards with different databases using of `default database` won't help. The best way to solve this will be to have parametrized
+ad-hoc variable in dashboard settings. Currently it's not supported by Grafana interface (see [issue](https://github.com/grafana/grafana/issues/13109)).
+As a temporary workaround, plugin will try to look for variable with name `adhoc_query_filter` and if it exists will use it's value as query to fetch columns.
+To do so we recommend to create some `constant` variable with name `adhoc_query_filter` and set value similar to following:
+```
+SELECT database, table, name, type FROM system.columns WHERE table='myTable' ORDER BY database, table
+```
+
+That should help to control data fetching by ad-hoc queries.
+
+
+### Query variables
+
+To use time range dependent macros like `$from` and `$to` in your query the refresh mode of the template variable needs to be set to On Time Range Change.
+```
+SELECT ClientID FROM events WHERE EventTime > $from AND EventTime < $to
+```
+
+
+### Configure the Datasource with Provisioning
+It’s now possible to configure datasources using config files with Grafana’s provisioning system.
+You can read more about how it works and all the settings you can set for datasources on the [provisioning docs page](http://docs.grafana.org/administration/provisioning/#datasources)
+
+Here are some provisioning example:
+```
+apiVersion: 1
+
+datasources:
+ - name: Clickhouse
+   type: vertamedia-clickhouse-datasource
+   access: proxy
+   url: http://localhost:8123
+
+   # <bool> enable/disable basic auth
+   basicAuth:
+   # <string> basic auth username
+   basicAuthUser:
+   # <string> basic auth password
+   basicAuthPassword:
+   # <bool> enable/disable with credentials headers
+   withCredentials:
+   # <bool> mark as default datasource. Max one per org
+   isDefault:
+   # <map> fields that will be converted to json and stored in json_data
+   jsonData:
+      # <bool> enable/disable sending 'add_http_cors_header=1' parameter
+      addCorsHeader:
+      # <bool> enable/disable using POST method for sending queries
+      usePOST:
+      # <string> default database name
+      defaultDatabase:
+```
+
+Some settings and security params are the same for all datasources. You can find them [here](http://docs.grafana.org/administration/provisioning/#example-datasource-config-file)
 
 
 ### FAQ
@@ -316,13 +392,25 @@ That's why plugin checks prev datapoints and tries to predict last datapoint val
 
 Alerts feature requires changes in `Grafana`'s backend, which can't be extended for now. `Grafana`'s maintainers are working on this feature.
 
+### Build
+
+The build works with either NPM or Yarn:
+
+```
+yarn run build
+```
+
+Tests can be run with Karma:
+
+```
+yarn run test
+```
 
 ### Contribute
 
 Since we developed this plugin only for internal needs we don't have some of Grafana's features:
 
 * Alerts (this feature requires additional changes at backend and can't be solved by js-plugin)
-* Annotations
 * Labels
 
 We know that code quality needs a tons of improvements and unit-tests. We will continue working on this. 
