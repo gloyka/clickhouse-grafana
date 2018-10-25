@@ -31,6 +31,7 @@ System.register(['lodash', 'app/core/utils/datemath', 'moment', './scanner'], fu
                         : 'DATETIME', i = this.templateSrv.replace(this.target.interval, options.scopedVars) || options.interval, interval = SqlQuery.convertInterval(i, this.target.intervalFactor || 1), round = this.target.round === "$step"
                         ? interval
                         : SqlQuery.convertInterval(this.target.round, 1), from = SqlQuery.convertTimestamp(SqlQuery.round(this.options.range.from, round)), to = SqlQuery.convertTimestamp(SqlQuery.round(this.options.range.to, round)), timeSeries = SqlQuery.getTimeSeries(dateTimeType), timeFilter = SqlQuery.getTimeFilter(this.options.rangeRaw.to === 'now', dateTimeType), adhocCondition = [];
+                    var interval_ms = SqlQuery.convertIntervalMs(i, this.target.intervalFactor || 1);
                     try {
                         var ast = scanner.toAST();
                         var topQuery = ast;
@@ -108,6 +109,7 @@ System.register(['lodash', 'app/core/utils/datemath', 'moment', './scanner'], fu
                         .replace(/\$sample/g, Math.min(((to - from) <= 3600) ? 1 : ((to - from) / 3600), 500))
                         .replace(/\$dateCol/g, this.target.dateColDataType)
                         .replace(/\$dateTimeCol/g, this.target.dateTimeColDataType)
+                        .replace(/\$interval_ms/g, interval_ms)
                         .replace(/\$interval/g, interval)
                         .replace(/\$adhoc/g, renderedAdHocCondition)
                         .replace(/(?:\r\n|\r|\n)/g, ' ');
@@ -277,6 +279,21 @@ System.register(['lodash', 'app/core/utils/datemath', 'moment', './scanner'], fu
                         sec = 1;
                     }
                     return Math.ceil(sec * intervalFactor);
+                };
+                SqlQuery.convertIntervalMs = function (interval, intervalFactor) {
+                    if (interval === undefined || typeof interval !== 'string' || interval == "") {
+                        return 0;
+                    }
+                    var m = interval.match(durationSplitRegexp);
+                    if (m === null) {
+                        throw { message: 'Received interval is invalid: ' + interval };
+                    }
+                    var dur = moment_1.default.duration(parseInt(m[1]), m[2]);
+                    var ms = dur.asMilliseconds();
+                    if (ms < 1) {
+                        ms = 1;
+                    }
+                    return Math.ceil(ms * intervalFactor);
                 };
                 SqlQuery.interpolateQueryExpr = function (value, variable, defaultFormatFn) {
                     // if no `multiselect` or `include all` - do not escape
